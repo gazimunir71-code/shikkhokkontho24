@@ -225,12 +225,14 @@ render();
 }
 
 function login(){
-if(document.getElementById("pw").value===PASSWORD){
-sessionStorage.setItem("sk24_admin","1");
-show();
-}else{
-alert("ভুল পাসওয়ার্ড");
-}
+  const pw = document.getElementById("pw").value;
+
+  if(pw === "12345678"){
+    sessionStorage.setItem("sk24_admin","1");
+    show();
+  }else{
+    alert("ভুল পাসওয়ার্ড");
+  }
 }
 
 function show(){
