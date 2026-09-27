@@ -82,7 +82,7 @@ a{text-decoration:none;color:inherit}
 
 <div class="head">
 <div>
-<div class="logo">শিক্ষক<span style="color:#d3262e">কণ্ঠ</span>২৪</div>
+<a href="https://shikkhokkontho24.gazi-munir71.workers.dev/" class="logo">শিক্ষক<span style="color:#d3262e">কণ্ঠ</span>২৪</a>
 <div class="tag">শিক্ষাঙ্গনের কথা, শিক্ষকের কণ্ঠে</div>
 </div>
 <div>🔎 খবর খুঁজুন...</div>
