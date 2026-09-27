@@ -14,8 +14,8 @@ const CATEGORIES = [
   "জীবনধারা"
 ];
 
-function esc(value = "") {
-  return String(value)
+function esc(v) {
+  return String(v || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -23,9 +23,9 @@ function esc(value = "") {
     .replace(/'/g, "&#039;");
 }
 
-function json(data, status = 200) {
+function json(data, status) {
   return new Response(JSON.stringify(data), {
-    status,
+    status: status || 200,
     headers: {
       "content-type": "application/json; charset=UTF-8",
       "cache-control": "no-store"
@@ -33,9 +33,9 @@ function json(data, status = 200) {
   });
 }
 
-function html(content, status = 200) {
-  return new Response(content, {
-    status,
+function page(body, status) {
+  return new Response(body, {
+    status: status || 200,
     headers: {
       "content-type": "text/html; charset=UTF-8",
       "cache-control": "no-store"
@@ -53,7 +53,7 @@ async function setupDB(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       excerpt TEXT DEFAULT '',
-      body TEXT NOT NULL,
+      body TEXT DEFAULT '',
       content TEXT DEFAULT '',
       image_url TEXT DEFAULT '',
       category TEXT DEFAULT 'শিক্ষা সংবাদ',
@@ -62,11 +62,6 @@ async function setupDB(db) {
       published INTEGER DEFAULT 1
     )
   `).run();
-
-  /*
-    পুরোনো ডাটাবেজে কোনো কলাম না থাকলে
-    সেগুলো যোগ করার চেষ্টা করা হবে।
-  */
 
   const columns = [
     ["excerpt", "TEXT DEFAULT ''"],
@@ -78,100 +73,63 @@ async function setupDB(db) {
     ["published", "INTEGER DEFAULT 1"]
   ];
 
-  for (const [name, definition] of columns) {
+  for (const item of columns) {
     try {
       await db.prepare(
-        `ALTER TABLE news ADD COLUMN ${name} ${definition}`
+        "ALTER TABLE news ADD COLUMN " +
+        item[0] + " " + item[1]
       ).run();
-    } catch (e) {
-      // কলাম আগে থেকেই থাকলে কিছু করার নেই
-    }
+    } catch (e) {}
   }
 }
 
-/* =========================
-   NEWS FUNCTIONS
-========================= */
+async function getNews(db, admin) {
+  let sql =
+    "SELECT id,title,excerpt,body,content,image_url," +
+    "category,date,created_at,published FROM news ";
 
-async function allNews(db, includeUnpublished = false) {
-  let sql = `
-    SELECT
-      id,
-      title,
-      excerpt,
-      body,
-      content,
-      image_url,
-      category,
-      date,
-      created_at,
-      published
-    FROM news
-  `;
-
-  if (!includeUnpublished) {
-    sql += ` WHERE published = 1 `;
+  if (!admin) {
+    sql += "WHERE published = 1 ";
   }
 
-  sql += `
-    ORDER BY
-      CASE
-        WHEN date IS NULL OR date = '' THEN created_at
-        ELSE date
-      END DESC,
-      id DESC
-  `;
+  sql +=
+    "ORDER BY id DESC";
 
   const result = await db.prepare(sql).all();
-
   return result.results || [];
 }
 
-async function oneNews(db, id) {
-  const result = await db.prepare(`
-    SELECT
-      id,
-      title,
-      excerpt,
-      body,
-      content,
-      image_url,
-      category,
-      date,
-      created_at,
-      published
-    FROM news
-    WHERE id = ?
-  `).bind(id).first();
-
-  return result || null;
+async function getOne(db, id) {
+  return await db.prepare(
+    "SELECT id,title,excerpt,body,content,image_url," +
+    "category,date,created_at,published " +
+    "FROM news WHERE id = ?"
+  ).bind(id).first();
 }
 
 /* =========================
-   ADMIN AUTH
-========================= */
-
-function isAdmin(request) {
-  return request.headers.get("x-admin-password") === PASSWORD;
-}
-
-/* =========================
-   SAVE NEWS
+   SAVE
 ========================= */
 
 async function saveNews(db, data) {
 
   const title = String(data.title || "").trim();
   const excerpt = String(data.excerpt || "").trim();
-  const body = String(data.body || data.content || "").trim();
-  const image_url = String(data.image_url || "").trim();
+  const body = String(
+    data.body || data.content || ""
+  ).trim();
+
+  const image = String(
+    data.image_url || ""
+  ).trim();
+
   const category = String(
     data.category || "শিক্ষা সংবাদ"
   ).trim();
 
   const date = String(
     data.date || new Date().toISOString().slice(0, 10)
-  ).trim();
+  );
 
   const published =
     data.published === false ||
@@ -190,32 +148,25 @@ async function saveNews(db, data) {
   if (!body) {
     return json({
       ok: false,
-      error: "সংবাদের বিস্তারিত লিখুন"
+      error: "বিস্তারিত সংবাদ লিখুন"
     }, 400);
   }
 
-  const id = data.id ? Number(data.id) : 0;
+  const id = Number(data.id || 0);
 
-  if (id) {
+  if (id > 0) {
 
-    await db.prepare(`
-      UPDATE news
-      SET
-        title = ?,
-        excerpt = ?,
-        body = ?,
-        content = ?,
-        image_url = ?,
-        category = ?,
-        date = ?,
-        published = ?
-      WHERE id = ?
-    `).bind(
+    await db.prepare(
+      "UPDATE news SET " +
+      "title=?, excerpt=?, body=?, content=?, " +
+      "image_url=?, category=?, date=?, published=? " +
+      "WHERE id=?"
+    ).bind(
       title,
       excerpt,
       body,
       body,
-      image_url,
+      image,
       category,
       date,
       published,
@@ -225,29 +176,20 @@ async function saveNews(db, data) {
     return json({
       ok: true,
       message: "নিউজ আপডেট হয়েছে",
-      id
+      id: id
     });
   }
 
-  const result = await db.prepare(`
-    INSERT INTO news
-    (
-      title,
-      excerpt,
-      body,
-      content,
-      image_url,
-      category,
-      date,
-      published
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
+  const result = await db.prepare(
+    "INSERT INTO news " +
+    "(title,excerpt,body,content,image_url,category,date,published) " +
+    "VALUES (?,?,?,?,?,?,?,?)"
+  ).bind(
     title,
     excerpt,
     body,
     body,
-    image_url,
+    image,
     category,
     date,
     published
@@ -255,69 +197,70 @@ async function saveNews(db, data) {
 
   return json({
     ok: true,
-    message: "নিউজ প্রকাশ হয়েছে",
+    message: "নিউজ সংরক্ষণ হয়েছে",
     id: result.meta.last_row_id
   });
 }
 
 /* =========================
-   HOME PAGE
+   HOME
 ========================= */
 
-async function homePage(db) {
+async function home(db) {
 
-  const news = await allNews(db, false);
+  const news = await getNews(db, false);
 
-  const cards = news.map(n => {
+  let cards = "";
 
-    const image = n.image_url
-      ? `
-        <img
-          src="${esc(n.image_url)}"
-          alt="${esc(n.title)}"
-          class="news-img"
-        >
-      `
-      : `
-        <div class="no-image">
-          শিক্ষককণ্ঠ২৪
-        </div>
-      `;
+  for (const n of news) {
 
-    return `
-      <article class="card">
+    let image = "";
 
-        ${image}
+    if (n.image_url) {
+      image =
+        '<img class="news-image" src="' +
+        esc(n.image_url) +
+        '" alt="' +
+        esc(n.title) +
+        '">';
+    } else {
+      image =
+        '<div class="no-image">শিক্ষককণ্ঠ২৪</div>';
+    }
 
-        <div class="card-body">
+    cards +=
+      '<article class="card">' +
+        image +
+        '<div class="card-body">' +
+          '<div class="cat">' +
+            esc(n.category) +
+          '</div>' +
+          '<h2>' +
+            '<a href="/news?id=' +
+            n.id +
+            '">' +
+            esc(n.title) +
+            '</a>' +
+          '</h2>' +
+          '<div class="date">' +
+            esc(n.date) +
+          '</div>' +
+          '<p>' +
+            esc(n.excerpt) +
+          '</p>' +
+          '<a class="read" href="/news?id=' +
+            n.id +
+          '">বিস্তারিত পড়ুন →</a>' +
+        '</div>' +
+      '</article>';
+  }
 
-          <div class="category">
-            ${esc(n.category)}
-          </div>
-
-          <h2>
-            <a href="/news?id=${n.id}">
-              ${esc(n.title)}
-            </a>
-          </h2>
-
-          <div class="date">
-            ${esc(n.date || "")}
-          </div>
-
-          <p>
-            ${esc(n.excerpt || "")}
-          </p>
-
-          <a class="read" href="/news?id=${n.id}">
-            বিস্তারিত পড়ুন →
-          </a>
-
-        </div>
-
-      </article>
-    `;
-  }).join("");
+  if (!cards) {
+    cards =
+      '<div class="empty">' +
+      'এখনো কোনো সংবাদ প্রকাশিত হয়নি।' +
+      '</div>';
+  }
 
   return `
 <!DOCTYPE html>
@@ -325,200 +268,135 @@ async function homePage(db) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-
 <title>${SITE_NAME}</title>
-
 <style>
-
-*{
-  box-sizing:border-box;
-}
-
+*{box-sizing:border-box}
 body{
-  margin:0;
-  font-family:
-    Arial,
-    "Noto Sans Bengali",
-    sans-serif;
-  background:#f4f6f8;
-  color:#222;
+margin:0;
+font-family:Arial,"Noto Sans Bengali",sans-serif;
+background:#f4f6f8;
+color:#222
 }
-
 header{
-  background:#ffffff;
-  border-bottom:1px solid #ddd;
+background:#fff;
+border-bottom:1px solid #ddd
 }
-
-.header-inner{
-  max-width:1100px;
-  margin:auto;
-  padding:18px 15px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:20px;
+.header{
+max-width:1100px;
+margin:auto;
+padding:18px 15px;
+display:flex;
+align-items:center;
+justify-content:space-between
 }
-
 .logo{
-  font-size:30px;
-  font-weight:bold;
-  color:#b40000;
-  text-decoration:none;
+font-size:30px;
+font-weight:bold;
+text-decoration:none;
+color:#c00000
 }
-
-.logo span{
-  color:#222;
+.logo span{color:#222}
+.admin{
+background:#222;
+color:white;
+padding:9px 14px;
+border-radius:6px;
+text-decoration:none
 }
-
-.admin-link{
-  text-decoration:none;
-  background:#111;
-  color:#fff;
-  padding:9px 15px;
-  border-radius:6px;
-}
-
 .container{
-  max-width:1100px;
-  margin:25px auto;
-  padding:0 15px;
+max-width:1100px;
+margin:25px auto;
+padding:0 15px
 }
-
-.site-title{
-  margin-bottom:25px;
-}
-
-.site-title h1{
-  margin:0 0 8px;
-}
-
 .grid{
-  display:grid;
-  grid-template-columns:
-    repeat(auto-fit,minmax(280px,1fr));
-  gap:20px;
+display:grid;
+grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+gap:20px
 }
-
 .card{
-  background:#fff;
-  border-radius:10px;
-  overflow:hidden;
-  box-shadow:0 2px 8px rgba(0,0,0,.08);
+background:white;
+border-radius:10px;
+overflow:hidden;
+box-shadow:0 2px 8px rgba(0,0,0,.08)
 }
-
-.news-img{
-  width:100%;
-  height:190px;
-  object-fit:cover;
-  display:block;
+.news-image{
+width:100%;
+height:190px;
+object-fit:cover
 }
-
 .no-image{
-  height:190px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  background:#eee;
-  font-size:25px;
-  font-weight:bold;
+height:190px;
+display:flex;
+align-items:center;
+justify-content:center;
+background:#eee;
+font-size:25px;
+font-weight:bold
 }
-
-.card-body{
-  padding:18px;
+.card-body{padding:18px}
+.cat{
+color:#c00000;
+font-weight:bold;
+font-size:14px
 }
-
-.category{
-  color:#b40000;
-  font-size:14px;
-  font-weight:bold;
-  margin-bottom:8px;
+h2{
+line-height:1.4
 }
-
-.card h2{
-  margin:0 0 8px;
-  font-size:22px;
-  line-height:1.35;
+h2 a{
+color:#222;
+text-decoration:none
 }
-
-.card h2 a{
-  color:#222;
-  text-decoration:none;
-}
-
 .date{
-  color:#777;
-  font-size:13px;
-  margin-bottom:10px;
+font-size:13px;
+color:#777
 }
-
-.card p{
-  line-height:1.7;
-  color:#555;
+p{
+line-height:1.7
 }
-
 .read{
-  color:#b40000;
-  text-decoration:none;
-  font-weight:bold;
+color:#c00000;
+font-weight:bold;
+text-decoration:none
 }
-
 .empty{
-  background:white;
-  padding:40px;
-  text-align:center;
-  border-radius:10px;
+background:white;
+padding:50px;
+text-align:center;
+border-radius:10px
 }
-
 footer{
-  margin-top:50px;
-  padding:25px;
-  text-align:center;
-  background:#222;
-  color:#fff;
+margin-top:50px;
+background:#222;
+color:white;
+padding:25px;
+text-align:center
 }
-
 </style>
 </head>
-
 <body>
 
 <header>
-
-  <div class="header-inner">
-
-    <a class="logo" href="/">
-      শিক্ষককণ্ঠ<span>২৪</span>
-    </a>
-
-    <a class="admin-link" href="/admin">
-      Admin
-    </a>
-
-  </div>
-
+<div class="header">
+<a class="logo" href="/">
+শিক্ষককণ্ঠ<span>২৪</span>
+</a>
+<a class="admin" href="/admin">Admin</a>
+</div>
 </header>
 
 <main class="container">
 
-  <div class="site-title">
-    <h1>সর্বশেষ সংবাদ</h1>
-    <p>শিক্ষা, শিক্ষকতা, সাহিত্য ও সমসাময়িক বিষয়</p>
-  </div>
+<h1>সর্বশেষ সংবাদ</h1>
+<p>শিক্ষা, শিক্ষকতা, সাহিত্য ও সমসাময়িক বিষয়</p>
 
-  ${
-    cards
-      ? `<div class="grid">${cards}</div>`
-      : `
-        <div class="empty">
-          এখনো কোনো সংবাদ প্রকাশিত হয়নি।
-        </div>
-      `
-  }
+<div class="grid">
+${cards}
+</div>
 
 </main>
 
 <footer>
-  © ${new Date().getFullYear()} ${SITE_NAME}
+© ${new Date().getFullYear()} ${SITE_NAME}
 </footer>
 
 </body>
@@ -527,186 +405,129 @@ footer{
 }
 
 /* =========================
-   NEWS DETAILS
+   SINGLE NEWS
 ========================= */
 
-async function newsPage(db, id) {
+async function singleNews(db, id) {
 
-  const n = await oneNews(db, id);
+  const n = await getOne(db, id);
 
   if (!n || Number(n.published) !== 1) {
-    return html(`
-      <!DOCTYPE html>
-      <html lang="bn">
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width,initial-scale=1">
-      <body style="
-        font-family:Arial;
-        padding:50px;
-        text-align:center;
-      ">
-        <h2>সংবাদ পাওয়া যায়নি</h2>
-        <a href="/">হোমপেজে ফিরে যান</a>
-      </body>
-      </html>
-    `, 404);
-  }
-
-  const image = n.image_url
-    ? `
-      <img
-        src="${esc(n.image_url)}"
-        style="
-          width:100%;
-          max-height:500px;
-          object-fit:cover;
-          border-radius:10px;
-          margin:20px 0;
-        "
-      >
-    `
-    : "";
-
-  const body = esc(n.body || n.content || "")
-    .replace(/\n/g, "<br>");
-
-  return html(`
+    return page(`
 <!DOCTYPE html>
 <html lang="bn">
-
 <head>
-
 <meta charset="UTF-8">
-
-<meta
-  name="viewport"
-  content="width=device-width,initial-scale=1"
->
-
-<title>${esc(n.title)} - ${SITE_NAME}</title>
-
-<style>
-
-body{
-  margin:0;
-  background:#f5f5f5;
-  font-family:
-    Arial,
-    "Noto Sans Bengali",
-    sans-serif;
-  color:#222;
-}
-
-header{
-  background:white;
-  padding:18px;
-  border-bottom:1px solid #ddd;
-}
-
-header a{
-  color:#b40000;
-  text-decoration:none;
-  font-size:28px;
-  font-weight:bold;
-}
-
-.container{
-  max-width:900px;
-  margin:30px auto;
-  padding:0 15px;
-}
-
-.article{
-  background:white;
-  padding:25px;
-  border-radius:10px;
-}
-
-.category{
-  color:#b40000;
-  font-weight:bold;
-}
-
-h1{
-  font-size:36px;
-  line-height:1.35;
-}
-
-.date{
-  color:#777;
-}
-
-.content{
-  font-size:19px;
-  line-height:2;
-}
-
-.back{
-  display:inline-block;
-  margin-top:25px;
-  color:#b40000;
-}
-
-@media(max-width:600px){
-
-  h1{
-    font-size:27px;
-  }
-
-  .article{
-    padding:18px;
-  }
-
-  .content{
-    font-size:18px;
-  }
-
-}
-
-</style>
-
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>সংবাদ পাওয়া যায়নি</title>
 </head>
+<body style="font-family:Arial;text-align:center;padding:50px">
+<h2>সংবাদ পাওয়া যায়নি</h2>
+<a href="/">হোমপেজে ফিরে যান</a>
+</body>
+</html>
+`, 404);
+  }
 
+  let image = "";
+
+  if (n.image_url) {
+    image =
+      '<img src="' +
+      esc(n.image_url) +
+      '" style="width:100%;max-height:500px;object-fit:cover;border-radius:10px">';
+  }
+
+  const content = esc(
+    n.body || n.content || ""
+  ).replace(/\n/g, "<br>");
+
+  return page(`
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(n.title)} - ${SITE_NAME}</title>
+<style>
+body{
+margin:0;
+background:#f5f5f5;
+font-family:Arial,"Noto Sans Bengali",sans-serif
+}
+header{
+background:white;
+padding:18px;
+border-bottom:1px solid #ddd
+}
+header a{
+color:#c00000;
+font-size:28px;
+font-weight:bold;
+text-decoration:none
+}
+.container{
+max-width:900px;
+margin:30px auto;
+padding:0 15px
+}
+.article{
+background:white;
+padding:25px;
+border-radius:10px
+}
+.cat{
+color:#c00000;
+font-weight:bold
+}
+h1{
+font-size:36px;
+line-height:1.4
+}
+.date{
+color:#777
+}
+.content{
+font-size:19px;
+line-height:2
+}
+.back{
+display:inline-block;
+margin-top:25px;
+color:#c00000
+}
+</style>
+</head>
 <body>
 
 <header>
-  <a href="/">শিক্ষককণ্ঠ২৪</a>
+<a href="/">শিক্ষককণ্ঠ২৪</a>
 </header>
 
 <main class="container">
+<article class="article">
 
-  <article class="article">
+<div class="cat">${esc(n.category)}</div>
 
-    <div class="category">
-      ${esc(n.category)}
-    </div>
+<h1>${esc(n.title)}</h1>
 
-    <h1>
-      ${esc(n.title)}
-    </h1>
+<div class="date">${esc(n.date)}</div>
 
-    <div class="date">
-      ${esc(n.date || "")}
-    </div>
+<br>
 
-    ${image}
+${image}
 
-    ${
-      n.excerpt
-        ? `<p><strong>${esc(n.excerpt)}</strong></p>`
-        : ""
-    }
+<p>
+<strong>${esc(n.excerpt)}</strong>
+</p>
 
-    <div class="content">
-      ${body}
-    </div>
+<div class="content">
+${content}
+</div>
 
-    <a class="back" href="/">
-      ← সব সংবাদ
-    </a>
+<a class="back" href="/">← সব সংবাদ</a>
 
-  </article>
-
+</article>
 </main>
 
 </body>
@@ -715,374 +536,270 @@ h1{
 }
 
 /* =========================
-   ADMIN PAGE
+   ADMIN
 ========================= */
 
 function adminPage() {
 
-  const categoryOptions = CATEGORIES
-    .map(c => `<option value="${esc(c)}">${esc(c)}</option>`)
-    .join("");
+  let options = "";
+
+  for (const c of CATEGORIES) {
+    options +=
+      '<option value="' +
+      esc(c) +
+      '">' +
+      esc(c) +
+      '</option>';
+  }
 
   return `
 <!DOCTYPE html>
-
 <html lang="bn">
-
 <head>
-
 <meta charset="UTF-8">
-
-<meta
-  name="viewport"
-  content="width=device-width,initial-scale=1"
->
-
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Admin - ${SITE_NAME}</title>
 
 <style>
-
-*{
-  box-sizing:border-box;
-}
+*{box-sizing:border-box}
 
 body{
-  margin:0;
-  background:#f2f4f7;
-  font-family:
-    Arial,
-    "Noto Sans Bengali",
-    sans-serif;
+margin:0;
+background:#f2f4f7;
+font-family:Arial,"Noto Sans Bengali",sans-serif
 }
 
 header{
-  background:#111;
-  color:white;
-  padding:18px;
+background:#111;
+color:white;
+padding:18px
 }
 
-header div{
-  max-width:1100px;
-  margin:auto;
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
+.header{
+max-width:1100px;
+margin:auto;
+display:flex;
+justify-content:space-between;
+align-items:center
 }
 
 .container{
-  max-width:1100px;
-  margin:25px auto;
-  padding:0 15px;
+max-width:1100px;
+margin:25px auto;
+padding:0 15px
 }
 
-.login,
-.panel{
-  background:white;
-  padding:25px;
-  border-radius:10px;
-  margin-bottom:20px;
-  box-shadow:0 2px 8px rgba(0,0,0,.07);
+.box{
+background:white;
+padding:25px;
+border-radius:10px;
+margin-bottom:20px;
+box-shadow:0 2px 8px rgba(0,0,0,.07)
 }
 
-input,
-textarea,
-select{
-  width:100%;
-  padding:12px;
-  margin:6px 0 15px;
-  border:1px solid #ccc;
-  border-radius:6px;
-  font-size:16px;
+input,textarea,select{
+width:100%;
+padding:12px;
+margin:6px 0 15px;
+border:1px solid #ccc;
+border-radius:6px;
+font-size:16px
 }
 
 textarea{
-  min-height:180px;
-  resize:vertical;
+min-height:180px
 }
 
 button{
-  border:0;
-  padding:11px 17px;
-  border-radius:6px;
-  cursor:pointer;
-  font-size:15px;
+border:0;
+padding:11px 17px;
+border-radius:6px;
+cursor:pointer;
+font-size:15px;
+margin:3px
 }
 
-.primary{
-  background:#b40000;
-  color:white;
+.red{
+background:#c00000;
+color:white
 }
 
-.dark{
-  background:#222;
-  color:white;
+.black{
+background:#222;
+color:white
 }
 
 .gray{
-  background:#ddd;
+background:#ddd
 }
 
 .danger{
-  background:#c62828;
-  color:white;
-}
-
-.news-item{
-  background:#fafafa;
-  border:1px solid #ddd;
-  padding:15px;
-  margin-bottom:12px;
-  border-radius:7px;
-}
-
-.news-item h3{
-  margin-top:0;
-}
-
-.small{
-  color:#777;
-  font-size:13px;
+background:#c62828;
+color:white
 }
 
 #dashboard{
-  display:none;
+display:none
 }
 
-#loginBox{
-  max-width:450px;
-  margin:60px auto;
-}
-
-.status{
-  padding:12px;
-  margin-bottom:15px;
-  border-radius:6px;
-  display:none;
-}
-
-.success{
-  background:#dff3e4;
-  color:#176b2c;
-}
-
-.error{
-  background:#ffe0e0;
-  color:#9b0000;
+.news{
+background:#fafafa;
+border:1px solid #ddd;
+padding:15px;
+margin-bottom:12px;
+border-radius:7px
 }
 
 .thumb{
-  width:120px;
-  height:80px;
-  object-fit:cover;
-  border-radius:5px;
-  margin-bottom:10px;
+width:120px;
+height:80px;
+object-fit:cover;
+border-radius:5px
 }
 
-.top-buttons{
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-  margin-bottom:15px;
+.small{
+color:#777;
+font-size:13px
+}
+
+.message{
+padding:12px;
+margin-bottom:15px;
+border-radius:6px;
+display:none
+}
+
+.ok{
+background:#dff3e4;
+color:#176b2c
+}
+
+.err{
+background:#ffe0e0;
+color:#9b0000
 }
 
 </style>
-
 </head>
 
 <body>
 
 <header>
-
-<div>
-
+<div class="header">
 <strong>${SITE_NAME} — Admin</strong>
-
-<a
-  href="/"
-  style="color:white;text-decoration:none"
->
-  Website
-</a>
-
+<a href="/" style="color:white">Website</a>
 </div>
-
 </header>
 
 <div class="container">
 
-<!-- LOGIN -->
-
-<div id="loginBox" class="login">
+<div id="login" class="box" style="max-width:450px;margin:50px auto">
 
 <h2>Admin Login</h2>
 
 <input
-  id="password"
-  type="password"
-  placeholder="Password"
-/>
-
-<button
-  class="primary"
-  onclick="login()"
+id="password"
+type="password"
+placeholder="Password"
 >
-  Login
+
+<button class="red" onclick="login()">
+Login
 </button>
 
-<div
-  id="loginError"
-  class="error"
-  style="margin-top:12px;display:none"
-></div>
+<p id="loginError" style="color:red"></p>
 
 </div>
-
-
-<!-- DASHBOARD -->
 
 <div id="dashboard">
 
-<div class="panel">
-
-<div class="top-buttons">
-
-<button
-  class="primary"
-  onclick="newNews()"
->
-  + নতুন নিউজ
-</button>
-
-<button
-  class="dark"
-  onclick="loadNews()"
->
-  ↻ Refresh
-</button>
-
-<button
-  class="gray"
-  onclick="logout()"
->
-  Logout
-</button>
-
-</div>
+<div class="box">
 
 <h2 id="formTitle">
-নতুন নিউজ প্রকাশ
+নতুন নিউজ
 </h2>
 
-<div
-  id="status"
-  class="status"
-></div>
+<div id="message" class="message"></div>
 
-<input
-  type="hidden"
-  id="newsId"
-/>
+<input id="newsId" type="hidden">
 
 <label>শিরোনাম</label>
 
 <input
-  id="title"
-  placeholder="সংবাদের শিরোনাম"
-/>
+id="title"
+placeholder="সংবাদের শিরোনাম"
+>
 
 <label>ক্যাটাগরি</label>
 
 <select id="category">
-
-${categoryOptions}
-
+${options}
 </select>
 
 <label>তারিখ</label>
 
-<input
-  id="date"
-  type="date"
-/>
+<input id="date" type="date">
 
 <label>ছবির URL</label>
 
 <input
-  id="image"
-  placeholder="Cloudinary image URL"
-/>
-
-<button
-  type="button"
-  class="dark"
-  onclick="uploadImage()"
+id="image"
+placeholder="Cloudinary image URL"
 >
-  Cloudinary থেকে ছবি আপলোড
-</button>
 
 <input
-  id="file"
-  type="file"
-  accept="image/*"
-  style="display:none"
-/>
+id="file"
+type="file"
+accept="image/*"
+style="display:none"
+>
 
-<div
-  id="imageStatus"
-  class="small"
-  style="margin:10px 0"
-></div>
+<button class="black" onclick="chooseImage()">
+ছবি আপলোড
+</button>
+
+<span id="uploadStatus"></span>
 
 <label>সংক্ষিপ্ত বিবরণ</label>
 
 <textarea
-  id="excerpt"
-  style="min-height:100px"
-  placeholder="সংবাদের সংক্ষিপ্ত বিবরণ"
+id="excerpt"
+style="min-height:100px"
 ></textarea>
 
 <label>বিস্তারিত সংবাদ</label>
 
-<textarea
-  id="body"
-  placeholder="বিস্তারিত সংবাদ লিখুন"
-></textarea>
+<textarea id="body"></textarea>
 
 <label>
-
 <input
-  id="published"
-  type="checkbox"
-  checked
-  style="width:auto"
+id="published"
+type="checkbox"
+checked
+style="width:auto"
 >
-
  প্রকাশিত থাকবে
-
 </label>
 
-<br><br>
+<br>
 
-<button
-  class="primary"
-  onclick="saveNews()"
->
-  নিউজ সংরক্ষণ
+<button class="red" onclick="saveNews()">
+নিউজ সংরক্ষণ
 </button>
 
-<button
-  class="gray"
-  onclick="newNews()"
->
-  বাতিল
+<button class="gray" onclick="clearForm()">
+নতুন / বাতিল
 </button>
 
 </div>
 
+<div class="box">
 
-<div class="panel">
+<h2>নিউজ তালিকা</h2>
 
-<h2>প্রকাশিত / সংরক্ষিত নিউজ</h2>
+<button class="black" onclick="loadNews()">
+Refresh
+</button>
 
 <div id="newsList">
 লোড হচ্ছে...
@@ -1094,537 +811,390 @@ ${categoryOptions}
 
 </div>
 
-
 <script>
 
-let ADMIN_PASSWORD = "";
-let editingId = 0;
+var ADMIN_PASSWORD = "";
+var EDIT_ID = 0;
 
+function $(id) {
+  return document.getElementById(id);
+}
 
-/* =========================
-   LOGIN
-========================= */
+function login() {
 
-function login(){
+  var p = $("password").value;
 
-  const p =
-    document.getElementById("password").value;
-
-  if(!p){
-    showLoginError("Password দিন");
+  if (!p) {
+    $("loginError").innerText = "Password দিন";
     return;
   }
 
-  ADMIN_PASSWORD = p;
-
-  fetch("/api/news?admin=1",{
-    headers:{
-      "x-admin-password":ADMIN_PASSWORD
+  fetch("/api/news?admin=1", {
+    headers: {
+      "x-admin-password": p
     }
   })
-  .then(async r => {
+  .then(function(r) {
+    if (!r.ok) {
+      throw new Error("login");
+    }
+    return r.json();
+  })
+  .then(function() {
 
-    if(!r.ok){
+    ADMIN_PASSWORD = p;
 
-      let text = await r.text();
+    localStorage.setItem(
+      "shikkhok_admin_password",
+      p
+    );
 
-      throw new Error(
-        text || "Login failed"
-      );
+    $("login").style.display = "none";
+    $("dashboard").style.display = "block";
+
+    setDate();
+    loadNews();
+
+  })
+  .catch(function() {
+
+    $("loginError").innerText =
+      "Password ভুল অথবা Server সমস্যা";
+
+  });
+}
+
+function start() {
+
+  var p =
+    localStorage.getItem(
+      "shikkhok_admin_password"
+    );
+
+  if (!p) {
+    return;
+  }
+
+  fetch("/api/news?admin=1", {
+    headers: {
+      "x-admin-password": p
+    }
+  })
+  .then(function(r) {
+
+    if (!r.ok) {
+      throw new Error("login");
     }
 
     return r.json();
 
   })
-  .then(() => {
+  .then(function() {
 
-    localStorage.setItem(
-      "shikkhok_admin_password",
-      ADMIN_PASSWORD
-    );
+    ADMIN_PASSWORD = p;
 
-    document.getElementById(
-      "loginBox"
-    ).style.display="none";
+    $("login").style.display = "none";
+    $("dashboard").style.display = "block";
 
-    document.getElementById(
-      "dashboard"
-    ).style.display="block";
-
-    setToday();
-
+    setDate();
     loadNews();
 
   })
-  .catch(err => {
+  .catch(function() {
 
-    showLoginError(
-      "Password সঠিক নয় অথবা Server সমস্যা হয়েছে"
+    localStorage.removeItem(
+      "shikkhok_admin_password"
     );
 
   });
 }
 
+function setDate() {
 
-function showLoginError(text){
+  if (!$("date").value) {
 
-  const box =
-    document.getElementById("loginError");
-
-  box.innerText = text;
-
-  box.style.display="block";
-}
-
-
-/* =========================
-   START
-========================= */
-
-window.addEventListener(
-  "load",
-  () => {
-
-    const saved =
-      localStorage.getItem(
-        "shikkhok_admin_password"
-      );
-
-    if(saved){
-
-      ADMIN_PASSWORD = saved;
-
-      fetch("/api/news?admin=1",{
-        headers:{
-          "x-admin-password":
-            ADMIN_PASSWORD
-        }
-      })
-      .then(r => {
-
-        if(!r.ok)
-          throw new Error();
-
-        document.getElementById(
-          "loginBox"
-        ).style.display="none";
-
-        document.getElementById(
-          "dashboard"
-        ).style.display="block";
-
-        setToday();
-
-        loadNews();
-
-      })
-      .catch(() => {
-
-        localStorage.removeItem(
-          "shikkhok_admin_password"
-        );
-
-      });
-
-    }
-
-  }
-);
-
-
-/* =========================
-   DATE
-========================= */
-
-function setToday(){
-
-  if(!document.getElementById("date").value){
-
-    document.getElementById("date").value =
+    $("date").value =
       new Date()
-        .toISOString()
-        .slice(0,10);
+      .toISOString()
+      .slice(0, 10);
 
   }
+}
+
+function clearForm() {
+
+  EDIT_ID = 0;
+
+  $("newsId").value = "";
+  $("title").value = "";
+  $("excerpt").value = "";
+  $("body").value = "";
+  $("image").value = "";
+  $("published").checked = true;
+
+  $("formTitle").innerText =
+    "নতুন নিউজ";
+
+  setDate();
 
 }
 
+function saveNews() {
 
-/* =========================
-   LOAD NEWS
-========================= */
+  var data = {
 
-function loadNews(){
+    id: EDIT_ID,
 
-  fetch("/api/news?admin=1",{
+    title: $("title").value,
 
-    headers:{
-      "x-admin-password":
-        ADMIN_PASSWORD
-    }
+    category: $("category").value,
 
-  })
-  .then(r => r.json())
-  .then(data => {
+    date: $("date").value,
 
-    const list =
-      document.getElementById("newsList");
+    image_url: $("image").value,
 
-    if(!data.length){
+    excerpt: $("excerpt").value,
 
-      list.innerHTML =
-        "<p>এখনো কোনো নিউজ নেই।</p>";
+    body: $("body").value,
 
-      return;
-    }
-
-    list.innerHTML =
-      data.map(n => {
-
-        const image =
-          n.image_url
-            ? `
-              <img
-                class="thumb"
-                src="${n.image_url}"
-              >
-            `
-            : "";
-
-        return `
-          <div class="news-item">
-
-            ${image}
-
-            <h3>
-              ${escapeHtml(n.title)}
-            </h3>
-
-            <div class="small">
-              ${escapeHtml(n.category)}
-              —
-              ${escapeHtml(n.date || "")}
-            </div>
-
-            <p>
-              ${escapeHtml(
-                n.excerpt || ""
-              )}
-            </p>
-
-            <button
-              class="dark"
-              onclick='editNews(${JSON.stringify(n)})'
-            >
-              Edit
-            </button>
-
-            <button
-              class="danger"
-              onclick="deleteNews(${n.id})"
-            >
-              Delete
-            </button>
-
-          </div>
-        `;
-
-      }).join("");
-
-  })
-  .catch(() => {
-
-    document.getElementById(
-      "newsList"
-    ).innerHTML =
-      "<p>নিউজ লোড করা যায়নি।</p>";
-
-  });
-
-}
-
-
-/* =========================
-   NEW NEWS
-========================= */
-
-function newNews(){
-
-  editingId = 0;
-
-  document.getElementById(
-    "newsId"
-  ).value="";
-
-  document.getElementById(
-    "formTitle"
-  ).innerText =
-    "নতুন নিউজ প্রকাশ";
-
-  document.getElementById(
-    "title"
-  ).value="";
-
-  document.getElementById(
-    "excerpt"
-  ).value="";
-
-  document.getElementById(
-    "body"
-  ).value="";
-
-  document.getElementById(
-    "image"
-  ).value="";
-
-  document.getElementById(
-    "published"
-  ).checked=true;
-
-  setToday();
-
-  window.scrollTo({
-    top:0,
-    behavior:"smooth"
-  });
-
-}
-
-
-/* =========================
-   EDIT
-========================= */
-
-function editNews(n){
-
-  editingId = Number(n.id);
-
-  document.getElementById(
-    "newsId"
-  ).value=n.id;
-
-  document.getElementById(
-    "formTitle"
-  ).innerText =
-    "নিউজ সম্পাদনা";
-
-  document.getElementById(
-    "title"
-  ).value=n.title || "";
-
-  document.getElementById(
-    "category"
-  ).value=n.category || "শিক্ষা সংবাদ";
-
-  document.getElementById(
-    "date"
-  ).value=n.date || "";
-
-  document.getElementById(
-    "image"
-  ).value=n.image_url || "";
-
-  document.getElementById(
-    "excerpt"
-  ).value=n.excerpt || "";
-
-  document.getElementById(
-    "body"
-  ).value=n.body || n.content || "";
-
-  document.getElementById(
-    "published"
-  ).checked =
-    Number(n.published) === 1;
-
-  window.scrollTo({
-    top:0,
-    behavior:"smooth"
-  });
-
-}
-
-
-/* =========================
-   SAVE
-========================= */
-
-function saveNews(){
-
-  const data = {
-
-    id: editingId || 0,
-
-    title:
-      document.getElementById(
-        "title"
-      ).value,
-
-    category:
-      document.getElementById(
-        "category"
-      ).value,
-
-    date:
-      document.getElementById(
-        "date"
-      ).value,
-
-    image_url:
-      document.getElementById(
-        "image"
-      ).value,
-
-    excerpt:
-      document.getElementById(
-        "excerpt"
-      ).value,
-
-    body:
-      document.getElementById(
-        "body"
-      ).value,
-
-    published:
-      document.getElementById(
-        "published"
-      ).checked
+    published: $("published").checked
 
   };
 
-  fetch("/api/admin/news",{
+  fetch("/api/admin/news", {
 
-    method:"POST",
+    method: "POST",
 
-    headers:{
+    headers: {
+
       "content-type":
         "application/json",
 
       "x-admin-password":
         ADMIN_PASSWORD
+
     },
 
-    body:JSON.stringify(data)
+    body: JSON.stringify(data)
 
   })
-  .then(r => r.json())
-  .then(result => {
+  .then(function(r) {
+    return r.json();
+  })
+  .then(function(result) {
 
-    if(!result.ok){
+    if (!result.ok) {
 
-      showStatus(
-        result.error ||
-        "সংরক্ষণ করা যায়নি",
+      showMessage(
+        result.error || "সমস্যা হয়েছে",
         false
       );
 
       return;
     }
 
-    showStatus(
-      result.message ||
-      "সফল হয়েছে",
+    showMessage(
+      result.message || "সফল হয়েছে",
       true
     );
 
-    newNews();
-
+    clearForm();
     loadNews();
 
   })
-  .catch(() => {
+  .catch(function() {
 
-    showStatus(
+    showMessage(
       "Server error হয়েছে",
       false
     );
 
   });
-
 }
 
+function loadNews() {
 
-/* =========================
-   DELETE
-========================= */
+  fetch("/api/news?admin=1", {
 
-function deleteNews(id){
+    headers: {
+      "x-admin-password":
+        ADMIN_PASSWORD
+    }
 
-  if(!confirm(
-    "এই নিউজটি মুছে ফেলতে চান?"
-  )){
+  })
+  .then(function(r) {
+    return r.json();
+  })
+  .then(function(list) {
+
+    var box = $("newsList");
+
+    if (!list.length) {
+
+      box.innerHTML =
+        "<p>এখনো কোনো নিউজ নেই।</p>";
+
+      return;
+    }
+
+    var html = "";
+
+    list.forEach(function(n) {
+
+      html +=
+        '<div class="news">';
+
+      if (n.image_url) {
+
+        html +=
+          '<img class="thumb" src="' +
+          escapeHtml(n.image_url) +
+          '"><br>';
+
+      }
+
+      html +=
+        "<h3>" +
+        escapeHtml(n.title) +
+        "</h3>";
+
+      html +=
+        '<div class="small">' +
+        escapeHtml(n.category) +
+        " — " +
+        escapeHtml(n.date) +
+        "</div>";
+
+      html +=
+        "<p>" +
+        escapeHtml(n.excerpt) +
+        "</p>";
+
+      html +=
+        '<button class="black" ' +
+        'onclick="editNews(' +
+        n.id +
+        ')">Edit</button>';
+
+      html +=
+        '<button class="danger" ' +
+        'onclick="deleteNews(' +
+        n.id +
+        ')">Delete</button>';
+
+      html +=
+        "</div>";
+
+    });
+
+    box.innerHTML = html;
+
+    window.newsData = list;
+
+  })
+  .catch(function() {
+
+    $("newsList").innerHTML =
+      "<p>নিউজ লোড করা যায়নি।</p>";
+
+  });
+}
+
+function editNews(id) {
+
+  var list = window.newsData || [];
+  var n = null;
+
+  for (var i = 0; i < list.length; i++) {
+
+    if (Number(list[i].id) === Number(id)) {
+      n = list[i];
+      break;
+    }
+
+  }
+
+  if (!n) {
+    return;
+  }
+
+  EDIT_ID = Number(n.id);
+
+  $("newsId").value = n.id;
+  $("title").value = n.title || "";
+  $("category").value =
+    n.category || "শিক্ষা সংবাদ";
+  $("date").value = n.date || "";
+  $("image").value = n.image_url || "";
+  $("excerpt").value = n.excerpt || "";
+  $("body").value =
+    n.body || n.content || "";
+
+  $("published").checked =
+    Number(n.published) === 1;
+
+  $("formTitle").innerText =
+    "নিউজ সম্পাদনা";
+
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth"
+  });
+}
+
+function deleteNews(id) {
+
+  if (!confirm("নিউজটি মুছে ফেলবেন?")) {
     return;
   }
 
   fetch(
     "/api/admin/news?id=" + id,
     {
-      method:"DELETE",
-      headers:{
+      method: "DELETE",
+      headers: {
         "x-admin-password":
           ADMIN_PASSWORD
       }
     }
   )
-  .then(r => r.json())
-  .then(result => {
+  .then(function(r) {
+    return r.json();
+  })
+  .then(function(result) {
 
-    if(result.ok){
-
+    if (result.ok) {
       loadNews();
-
-    }else{
-
+    } else {
       alert(
-        result.error ||
-        "Delete করা যায়নি"
+        result.error || "Delete failed"
       );
-
     }
 
   });
 
 }
 
-
-/* =========================
-   CLOUDINARY
-========================= */
-
-function uploadImage(){
-
-  document.getElementById(
-    "file"
-  ).click();
-
+function chooseImage() {
+  $("file").click();
 }
 
-
-document.getElementById(
-  "file"
-).addEventListener(
+$("file").addEventListener(
   "change",
-  function(){
+  function() {
 
-    const file = this.files[0];
+    var file = this.files[0];
 
-    if(!file) return;
+    if (!file) {
+      return;
+    }
 
-    const status =
-      document.getElementById(
-        "imageStatus"
-      );
+    $("uploadStatus").innerText =
+      " ছবি আপলোড হচ্ছে...";
 
-    status.innerText =
-      "ছবি আপলোড হচ্ছে...";
+    var form = new FormData();
 
-    const form =
-      new FormData();
-
-    form.append(
-      "file",
-      file
-    );
+    form.append("file", file);
 
     form.append(
       "upload_preset",
@@ -1634,104 +1204,71 @@ document.getElementById(
     fetch(
       "https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload",
       {
-        method:"POST",
-        body:form
+        method: "POST",
+        body: form
       }
     )
-    .then(r => r.json())
-    .then(data => {
+    .then(function(r) {
+      return r.json();
+    })
+    .then(function(data) {
 
-      if(data.secure_url){
+      if (data.secure_url) {
 
-        document.getElementById(
-          "image"
-        ).value =
+        $("image").value =
           data.secure_url;
 
-        status.innerText =
-          "ছবি সফলভাবে আপলোড হয়েছে";
+        $("uploadStatus").innerText =
+          " ছবি আপলোড হয়েছে";
 
-      }else{
+      } else {
 
-        status.innerText =
-          "ছবি আপলোড হয়নি";
+        $("uploadStatus").innerText =
+          " ছবি আপলোড হয়নি";
 
       }
 
     })
-    .catch(() => {
+    .catch(function() {
 
-      status.innerText =
-        "ছবি আপলোডে সমস্যা হয়েছে";
+      $("uploadStatus").innerText =
+        " আপলোডে সমস্যা হয়েছে";
 
     });
 
   }
 );
 
+function showMessage(text, ok) {
 
-/* =========================
-   STATUS
-========================= */
+  var box = $("message");
 
-function showStatus(
-  text,
-  success
-){
-
-  const box =
-    document.getElementById(
-      "status"
-    );
-
-  box.innerText=text;
+  box.innerText = text;
 
   box.className =
-    "status " +
-    (success
-      ? "success"
-      : "error");
+    ok
+      ? "message ok"
+      : "message err";
 
-  box.style.display="block";
+  box.style.display = "block";
 
-  setTimeout(() => {
-
-    box.style.display="none";
-
-  },4000);
-
+  setTimeout(function() {
+    box.style.display = "none";
+  }, 4000);
 }
 
-
-/* =========================
-   LOGOUT
-========================= */
-
-function logout(){
-
-  localStorage.removeItem(
-    "shikkhok_admin_password"
-  );
-
-  location.reload();
-
-}
-
-
-/* =========================
-   ESCAPE
-========================= */
-
-function escapeHtml(value){
+function escapeHtml(value) {
 
   return String(value || "")
-    .replace(/&/g,"&amp;")
-    .replace(/</g,"&lt;")
-    .replace(/>/g,"&gt;")
-    .replace(/"/g,"&quot;")
-    .replace(/'/g,"&#039;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 
 }
+
+start();
 
 </script>
 
@@ -1740,9 +1277,8 @@ function escapeHtml(value){
 `;
 }
 
-
 /* =========================
-   MAIN WORKER
+   WORKER
 ========================= */
 
 export default {
@@ -1751,13 +1287,13 @@ export default {
 
     try {
 
-      if(!env.DB){
+      if (!env.DB) {
 
         return new Response(
-          "ERROR: D1 binding 'DB' পাওয়া যায়নি।",
+          "D1 binding DB পাওয়া যায়নি।",
           {
-            status:500,
-            headers:{
+            status: 500,
+            headers: {
               "content-type":
                 "text/plain; charset=UTF-8"
             }
@@ -1773,81 +1309,73 @@ export default {
       const url =
         new URL(request.url);
 
-      /* =====================
-         API — PUBLIC NEWS
-      ===================== */
+      /* PUBLIC API */
 
-      if(
+      if (
         url.pathname === "/api/news" &&
         request.method === "GET"
-      ){
+      ) {
 
         const admin =
           url.searchParams.get("admin");
 
-        if(admin === "1"){
+        if (admin === "1") {
 
-          if(!isAdmin(request)){
-
+          if (
+            request.headers.get(
+              "x-admin-password"
+            ) !== PASSWORD
+          ) {
             return json({
-              ok:false,
-              error:"Unauthorized"
-            },401);
-
+              ok: false,
+              error: "Unauthorized"
+            }, 401);
           }
 
-          const news =
-            await allNews(
-              db,
-              true
-            );
-
-          return json(news);
+          return json(
+            await getNews(db, true)
+          );
         }
 
         const id =
           url.searchParams.get("id");
 
-        if(id){
+        if (id) {
 
           const n =
-            await oneNews(db,id);
+            await getOne(db, id);
 
-          if(!n ||
-             Number(n.published) !== 1){
-
+          if (
+            !n ||
+            Number(n.published) !== 1
+          ) {
             return json({});
           }
 
           return json(n);
         }
 
-        const news =
-          await allNews(
-            db,
-            false
-          );
-
-        return json(news);
+        return json(
+          await getNews(db, false)
+        );
       }
 
+      /* SAVE */
 
-      /* =====================
-         API — SAVE
-      ===================== */
-
-      if(
+      if (
         url.pathname === "/api/admin/news" &&
         request.method === "POST"
-      ){
+      ) {
 
-        if(!isAdmin(request)){
-
+        if (
+          request.headers.get(
+            "x-admin-password"
+          ) !== PASSWORD
+        ) {
           return json({
-            ok:false,
-            error:"Unauthorized"
-          },401);
-
+            ok: false,
+            error: "Unauthorized"
+          }, 401);
         }
 
         const data =
@@ -1859,23 +1387,22 @@ export default {
         );
       }
 
+      /* DELETE */
 
-      /* =====================
-         API — DELETE
-      ===================== */
-
-      if(
+      if (
         url.pathname === "/api/admin/news" &&
         request.method === "DELETE"
-      ){
+      ) {
 
-        if(!isAdmin(request)){
-
+        if (
+          request.headers.get(
+            "x-admin-password"
+          ) !== PASSWORD
+        ) {
           return json({
-            ok:false,
-            error:"Unauthorized"
-          },401);
-
+            ok: false,
+            error: "Unauthorized"
+          }, 401);
         }
 
         const id =
@@ -1883,13 +1410,11 @@ export default {
             url.searchParams.get("id")
           );
 
-        if(!id){
-
+        if (!id) {
           return json({
-            ok:false,
-            error:"ID পাওয়া যায়নি"
-          },400);
-
+            ok: false,
+            error: "ID নেই"
+          }, 400);
         }
 
         await db.prepare(
@@ -1897,34 +1422,77 @@ export default {
         ).bind(id).run();
 
         return json({
-          ok:true,
-          message:"নিউজ মুছে ফেলা হয়েছে"
+          ok: true,
+          message: "নিউজ মুছে ফেলা হয়েছে"
         });
       }
 
+      /* ADMIN */
 
-      /* =====================
-         ADMIN
-      ===================== */
-
-      if(
+      if (
         url.pathname === "/admin" ||
         url.pathname === "/admin/"
-      ){
-
-        return html(
+      ) {
+        return page(
           adminPage()
         );
       }
 
+      /* SINGLE NEWS */
 
-      /* =====================
-         NEWS DETAILS
-      ===================== */
-
-      if(
-        url.pathname === "/news"
-      ){
+      if (url.pathname === "/news") {
 
         const id =
-          url.search
+          url.searchParams.get("id");
+
+        if (!id) {
+          return page(
+            "<h2>News ID নেই</h2>",
+            400
+          );
+        }
+
+        return await singleNews(
+          db,
+          id
+        );
+      }
+
+      /* HOME */
+
+      if (
+        url.pathname === "/" ||
+        url.pathname === ""
+      ) {
+        return page(
+          await home(db)
+        );
+      }
+
+      return new Response(
+        "পৃষ্ঠা পাওয়া যায়নি",
+        {
+          status: 404,
+          headers: {
+            "content-type":
+              "text/plain; charset=UTF-8"
+          }
+        }
+      );
+
+    } catch (error) {
+
+      return new Response(
+        "Worker Error: " +
+        error.message,
+        {
+          status: 500,
+          headers: {
+            "content-type":
+              "text/plain; charset=UTF-8"
+          }
+        }
+      );
+    }
+  }
+};
